@@ -1,0 +1,28 @@
+name: Weekly Event Scraper
+
+on:
+  schedule:
+    - cron: '0 12 * * 1' # Runs every Monday at 12:00 PM UTC (8:00 AM EST)
+  workflow_dispatch: # Adds a button to the GitHub UI for manually triggering
+
+jobs:
+  scrape-and-update:
+    runs-on: ubuntu-latest # Tells GitHub to boot up a temporary Linux server
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Scraper
+        env: # Pulls the keys saved earlier and injects them into the server
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scraper.js
+        
