@@ -1,7 +1,11 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
+
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
+
 const { createClient } = require('@supabase/supabase-js');
 const filterPastEvents = require('./utils/filterEvents');
 
@@ -11,7 +15,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function runAggregator() {
     console.log("Starting Tri-State Muay Thai Aggregator Pipeline...\n");
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await puppeteer.launch({ headless: false });
     let aggregatedEvents = [];
 
     // Dynamically load all files from the scrapers directory
