@@ -13,7 +13,7 @@ Web scrapers break constantly when promoters update their websites. To ensure my
 *   **Node.js & Puppeteer (Stealth):** Standard HTTP requests failed against dynamic Wix sites and Next.js ticketing portals. I implemented headless Chrome browsers with puppeteer-extra-plugin-stealth to render the JavaScript and successfully bypass the ticketing platforms' anti-bot API filters.
 *   **Supabase (PostgreSQL):** Cloud database utilizing unique table constraints to handle .upsert() deduplication, preventing duplicate rows when the scraper runs multiple times.
 *   **JavaScript (Regex):** Promoters write dates differently (e.g., "Oct 3" vs "10/3"). I wrote custom date-parsing utilities using Regex to convert messy text strings into standardized JS Date objects, allowing the pipeline to automatically filter out previous bouts.
-*   **GitHub Actions:** CI/CD cron workflows schedule the pipeline to execute autonomously every Monday.
+*   **GitHub Actions:** CI/CD cron workflows schedule the pipeline to execute autonomously every Monday morning, meaning the calendar stays up to date without any manual intervention.
 
 ## Future Roadmap
 This aggregator is only Phase 1 of a broader community platform. Future iterations currently in my Agile backlog include:

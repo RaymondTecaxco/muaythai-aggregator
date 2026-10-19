@@ -7,7 +7,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
 const { createClient } = require('@supabase/supabase-js');
-const filterPastEvents = require('./utils/filterEvents');
+const formatAndFilterEvents = require('./utils/filterEvents');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
@@ -15,10 +15,13 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function runAggregator() {
     console.log("Starting Tri-State Muay Thai Aggregator Pipeline...\n");
-    const browser = await puppeteer.launch({ headless: false });
+    const browser = await puppeteer.launch({
+         headless: false,
+         ignoreHTTPSErrors: true
+          });
     let aggregatedEvents = [];
 
-    // Dynamically load all files from the scrapers directory
+    // Loading all files from the scrapers directory
     const scrapersDir = path.join(__dirname, 'scrapers');
     const scraperFiles = fs.readdirSync(scrapersDir).filter(file => file.endsWith('.js'));
 
@@ -42,7 +45,7 @@ async function runAggregator() {
 
     await browser.close();
 
-    const cleanEvents = filterPastEvents(aggregatedEvents);
+    const cleanEvents = formatAndFilterEvents(aggregatedEvents);
     console.log(`\nTotal valid upcoming events: ${cleanEvents.length}`);
 
     if (cleanEvents.length > 0) {

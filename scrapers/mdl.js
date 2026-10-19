@@ -1,7 +1,7 @@
 module.exports = {
     name: 'MuayThai Development League (MDL)',
     category: 'Grassroots & Development',
-    enabled: true,
+    enabled: false,
     async scrape(browser) {
         const page = await browser.newPage();
         try {
@@ -9,7 +9,7 @@ module.exports = {
             
             const events = await page.evaluate(() => {
                 const results = [];
-                // TODO: Inspect live site and replace '.event-card-placeholder'
+                // This organization hosts events and ticketing on a seperate platform. None are based in the tri-state area for the rest of 2026.
                 const cards = document.querySelectorAll('.event-card-placeholder');
                 
                 cards.forEach((card) => {
