@@ -99,12 +99,21 @@ module.exports = {
                     const aiData = JSON.parse(responseText);
 
                     if (aiData.isEvent && aiData.details) {
-                        extractedEvents.push({
-                            promotion: '3 Kings Promotions',
-                            details: aiData.details,
-                            url: aiData.url
-                        });
-                        console.log(`     - AI found event via ${post.type}: ${aiData.details}`);
+                        
+                        // Local Array Deduplication
+                        // Check if we've already saved an event with these exact details in this run
+                        const isDuplicate = extractedEvents.some(event => event.details === aiData.details);
+
+                        if (!isDuplicate) {
+                            extractedEvents.push({
+                                promotion: '3 Kings Promotions',
+                                details: aiData.details,
+                                url: aiData.url
+                            });
+                            console.log(`     - AI found event via ${post.type}: ${aiData.details}`);
+                        } else {
+                            console.log(`     - Skipping duplicate event found via ${post.type}: ${aiData.details}`);
+                        }
                     }
 
                 } catch (err) {
