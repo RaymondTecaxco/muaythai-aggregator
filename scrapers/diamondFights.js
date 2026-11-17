@@ -1,19 +1,10 @@
 const { ApifyClient } = require('apify-client');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { time } = require('../utils/timer');
+const { analyzeInstagramPost, isImagePost } = require('../utils/instagram');
+const { cleanInstagramEvent } = require('../utils/cleanEvents');
 
 // Initialize API Clients
 const apifyClient = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// Helper function: Downloads the Instagram image and converts it for Gemini
-async function urlToGenerativePart(imageUrl, mimeType) {
-    const response = await fetch(imageUrl);
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    return {
-        inlineData: { data: buffer.toString("base64"), mimeType },
-    };
-}
 
 module.exports = {
     name: 'Diamond Fights (AI Vision OCR)',
@@ -22,72 +13,43 @@ module.exports = {
     async scrape(browser) {
         console.log("  -> [Phase 1] Triggering Apify to fetch Instagram images...");
         const input = { "usernames": ["diamondheart_sg"], "resultsLimit": 5 };
-        const run = await apifyClient.actor("apify/instagram-profile-scraper").call(input);
-        const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
+        const run = await time('apify.actor-run', () => apifyClient.actor("apify/instagram-profile-scraper").call(input));
+        const { items } = await time('apify.dataset-fetch', () => apifyClient.dataset(run.defaultDatasetId).listItems());
 
         const profileData = items[0];
         if (!profileData || !profileData.latestPosts) return [];
 
-        const recentPosts = profileData.latestPosts.slice(0, 5);
-        const extractedEvents = [];
+        // Only image posts can be flyers for this account.
+        const recentPosts = profileData.latestPosts.slice(0, 5).filter(isImagePost);
 
-        // Initialize the Gemini 3.8 Flash model
-        const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+        console.log(`  -> [Phase 2] Analysing ${recentPosts.length} image post(s) (cached ones are skipped)...`);
 
-        console.log("  -> [Phase 2] Sending images to Gemini Vision API for analysis...");
-
-        // Loop through recent posts on Instagram
-        for (const post of recentPosts) {
-            if ((post.type === 'Image' || post.type === 'Sidecar') && post.displayUrl) {
-                try {
-                    // 1. Convert the image to base64
-                    const imagePart = await urlToGenerativePart(post.displayUrl, "image/jpeg");
-
-                    // 2. The AI Prompt
-                    const prompt = `
-                    You are an AI data extractor analyzing an Instagram image.
-                    The original Instagram caption is: "${post.caption || ""}"
-                    
-                    TASK 1: Determine if this image is a flyer/poster for a combat sports event. 
-                    If it is just a photo of a dog, people training, or a meme, reply EXACTLY with: {"isEvent": false}
-                    
-                    TASK 2: If it IS a fight flyer, extract the event name, date, time, and location.
-                    Combine them into a single clean string. If no ticket link is found on the flyer or caption, use "${post.url}".
-                    
-                    Return ONLY valid JSON in this exact structure, with no markdown formatting:
-                    {
-                        "isEvent": true,
-                        "details": "Event Name - Location, State (Month Day. Time)",
-                        "url": "extracted link"
-                    }`;
-
-                    // 3. Ask Gemini to read the image
-                    const result = await model.generateContent([prompt, imagePart]);
-                    const responseText = result.response.text().replace(/```json|```/g, '').trim(); // Strip markdown
-                    
-                    const aiData = JSON.parse(responseText);
-
-                    // 4. Map to the Supabase schema
-                    if (aiData.isEvent && aiData.details) {
-                        extractedEvents.push({
-                            promotion: 'Diamond Fights Ice Breaker',
-                            details: aiData.details, 
-                            url: aiData.url          
-                        });
-                        console.log(`     - AI found event: ${aiData.details}`);
-                    } else {
-                        console.log(`     - AI ignored image (Not a fight flyer)`);
-                    }
-
-                } catch (err) {
-                    console.error("     - Error processing image with Gemini:", err.message);
-                }
+        // Start every post at once; the shared rate limiter in utils/gemini.js
+        // decides when each Gemini call may actually go out.
+        const results = await Promise.all(recentPosts.map(async (post) => {
+            try {
+                return await analyzeInstagramPost(post);
+            } catch (err) {
+                console.error(`     - Error processing ${post.shortCode} with Gemini:`, err.cause?.message || err.message);
+                return null;
             }
-        }
+        }));
 
-        console.log(`  -> AI successfully validated ${extractedEvents.length} events.`);
-        
-        // Return the clean objects back to index.js
-        return extractedEvents; 
+        // Clean each answer into the standard event shape. The flyer's own
+        // promoter wins; this account's name is only the fallback label, because
+        // the gym often reposts other promotions' shows its fighters are on.
+        const events = [];
+        results.forEach((aiData, i) => {
+            if (!aiData || !aiData.isEvent) return;
+            const event = cleanInstagramEvent(aiData, {
+                defaultPromotion: 'Diamond Fights Ice Breaker',
+                post: recentPosts[i],
+            });
+            events.push(event);
+            console.log(`     - AI found event: ${event.details}`);
+        });
+
+        console.log(`  -> AI successfully validated ${events.length} events.`);
+        return events;
     }
 };
