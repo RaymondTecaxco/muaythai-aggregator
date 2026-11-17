@@ -1,3 +1,5 @@
+const { time } = require('../utils/timer');
+
 module.exports = {
     name: 'Freedom Fighter Promotions',
     category: 'Major Regional',
@@ -5,11 +7,12 @@ module.exports = {
     async scrape(browser) {
         const page = await browser.newPage();
         try {
-            await page.goto('https://tickets.freedomfighterpromotions.com/', { waitUntil: 'networkidle2' });
+            await time('web.page-load', async () => {
+                await page.goto('https://tickets.freedomfighterpromotions.com/', { waitUntil: 'networkidle2' });
+                await page.waitForSelector('.event-card', {timeout: 10000});
+            });
 
-            await page.waitForSelector('.event-card', {timeout: 10000})
-            
-            const events = await page.evaluate(() => {
+            const events = await time('web.extract', () => page.evaluate(() => {
                 const results = [];
                 
                 const cards = document.querySelectorAll('.event-card'); 
@@ -22,7 +25,7 @@ module.exports = {
                     });
                 });
                 return results;
-            });
+            }));
             return events;
         } catch(error) {
             console.error("Failed to extract Freedom Fighters", error.message);
