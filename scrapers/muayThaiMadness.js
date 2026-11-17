@@ -1,21 +1,23 @@
 const { ApifyClient } = require('apify-client');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { time, addCount } = require('../utils/timer');
+const { analyzeInstagramPost, isImagePost } = require('../utils/instagram');
+const { cleanInstagramEvent } = require('../utils/cleanEvents');
 
 // Initialize API Clients
 const apifyClient = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Helper function to pause the script (Throttling)
-const delay = ms => new Promise(res => setTimeout(res, ms));
 
-// Helper function: Downloads the Instagram image and converts it for Gemini
-async function urlToGenerativePart(imageUrl, mimeType) {
-    const response = await fetch(imageUrl);
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    return {
-        inlineData: { data: buffer.toString("base64"), mimeType },
-    };
-}
+// Pre-filter for VIDEO posts (Gemini only sees their caption, not the video).
+// A video is worth an AI call only if its caption has a concrete date
+// ("Nov 14", "JANUARY, 23RD", "12/12") or talks about tickets / doors.
+// \b = "word boundary", so "pm" no longer matches inside "equipment"
+// and "dec" no longer matches inside "decided".
+const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
+const EVENT_SIGNAL = new RegExp(
+    `\\b${MONTH}\\.?,?\\s*\\d{1,2}(?:st|nd|rd|th)?\\b` + // month name + day
+    `|\\b\\d{1,2}\\/\\d{1,2}\\b` +                         // 11/14
+    `|\\btickets?\\b|\\bdoors\\b`,                         // ticket / doors-open talk
+    'i'
+);
 
 module.exports = {
     name: '3 Kings / Lion\'s Roar',
@@ -23,105 +25,58 @@ module.exports = {
     enabled: true,
     async scrape(browser) {
         console.log("  -> [Phase 1] Triggering Apify for the 3 Kings ecosystem...");
-        
+
         // The Ecosystem Sweep & Expanded Limit
         // Apify accepts an array of usernames. Pass both profiles to scrape them in a single call.
-        const input = { 
-            "usernames": ["3kings_promotions", "lionsroarnyc"], 
-            "resultsLimit": 10 
+        const input = {
+            "usernames": ["3kings_promotions", "lionsroarnyc"],
+            "resultsLimit": 10
         };
-        
-        const run = await apifyClient.actor("apify/instagram-profile-scraper").call(input);
-        const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
 
-        const extractedEvents = [];
-        const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
+        const run = await time('apify.actor-run', () => apifyClient.actor("apify/instagram-profile-scraper").call(input));
+        const { items } = await time('apify.dataset-fetch', () => apifyClient.dataset(run.defaultDatasetId).listItems());
 
-        console.log("  -> [Phase 2] Forking AI analysis (Image OCR vs Video Metadata)...");
-
-        // Loop through both profiles returned by Apify
+        // Gather the posts worth analysing from both profiles into one list.
+        const postsToAnalyse = [];
         for (const profile of items) {
             if (!profile || !profile.latestPosts) continue;
-
-            const recentPosts = profile.latestPosts.slice(0, 10);
-
-            // Loop through the 10 posts for the current profile
-            for (const post of recentPosts) {
-                try {
-                    const captionText = post.caption || "";
-
-                    // Pre-Filtering
-                    // Drops videos/images that clearly have no event data.
-                    const eventKeywords = /tickets|doors|pm|fights|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i;
-                    if (!eventKeywords.test(captionText) && post.type === 'Video') {
-                        console.log(`     - Skipping Video (No event keywords in caption)`);
-                        continue; 
-                    }
-
-                    let prompt = `
-                    You are an AI data extractor analyzing an Instagram post for a combat sports event.
-                    The original Instagram caption is: "${captionText}"
-                    
-                    TASK 1: Determine if this post announces a specific upcoming fight event. 
-                    If it is just a hype reel, training footage, or meme with no specific upcoming event data, reply EXACTLY with: {"isEvent": false}
-                    
-                    TASK 2: If it IS an upcoming event, extract the event name, date, time, and location.
-                    Combine them into a single clean string. Use "${post.url}" for the URL.
-                    
-                    Return ONLY valid JSON in this exact structure, with no markdown formatting:
-                    {
-                        "isEvent": true,
-                        "details": "Event Name - Location, State (Month Day. Time)",
-                        "url": "extracted link"
-                    }`;
-
-                    let contentPayload = [];
-
-                    if ((post.type === 'Image' || post.type === 'Sidecar') && post.displayUrl) {
-                        const imagePart = await urlToGenerativePart(post.displayUrl, "image/jpeg");
-                        contentPayload = [prompt, imagePart];
-                    } else if (post.type === 'Video') {
-                        prompt += `\nNOTE: This is a video post. Extract the data ENTIRELY from the caption text provided above.`;
-                        contentPayload = [prompt];
-                    } else {
-                        continue; 
-                    }
-
-                    // Rate Limiting
-                    // Pause for 15 seconds to ensure I never exceed 4 requests per minute.
-                    console.log(`     - Throttling: Waiting 15 seconds for Gemini API Free-Tier limits...`);
-                    await delay(15000); 
-
-                    // Ask Gemini to analyze the payload
-                    const result = await model.generateContent(contentPayload);
-                    const responseText = result.response.text().replace(/```json|```/g, '').trim(); 
-                    
-                    const aiData = JSON.parse(responseText);
-
-                    if (aiData.isEvent && aiData.details) {
-                        
-                        // Local Array Deduplication
-                        // Check if we've already saved an event with these exact details in this run
-                        const isDuplicate = extractedEvents.some(event => event.details === aiData.details);
-
-                        if (!isDuplicate) {
-                            extractedEvents.push({
-                                promotion: '3 Kings Promotions',
-                                details: aiData.details,
-                                url: aiData.url
-                            });
-                            console.log(`     - AI found event via ${post.type}: ${aiData.details}`);
-                        } else {
-                            console.log(`     - Skipping duplicate event found via ${post.type}: ${aiData.details}`);
-                        }
-                    }
-
-                } catch (err) {
-                    console.error(`     - Error processing ${post.type} with Gemini:`, err.message);
+            for (const post of profile.latestPosts.slice(0, 10)) {
+                if (isImagePost(post)) {
+                    postsToAnalyse.push(post);
+                } else if (post.type === 'Video' && EVENT_SIGNAL.test(post.caption || '')) {
+                    postsToAnalyse.push(post);
+                } else {
+                    addCount('prefilter.skipped posts');
                 }
             }
         }
 
-        return extractedEvents; 
+        console.log(`  -> [Phase 2] Analysing ${postsToAnalyse.length} post(s) (cached ones are skipped)...`);
+
+        // Start all posts at once; the shared rate limiter spaces out the Gemini calls.
+        const results = await Promise.all(postsToAnalyse.map(async (post) => {
+            try {
+                return await analyzeInstagramPost(post);
+            } catch (err) {
+                console.error(`     - Error processing ${post.type} ${post.shortCode} with Gemini:`, err.cause?.message || err.message);
+                return null;
+            }
+        }));
+
+        // Clean each answer into the standard event shape. Duplicates (3 Kings and
+        // Lion's Roar often post the same announcement) are merged later, across
+        // ALL scrapers, by utils/dedupeEvents.js.
+        const events = [];
+        results.forEach((aiData, i) => {
+            if (!aiData || !aiData.isEvent) return;
+            const event = cleanInstagramEvent(aiData, {
+                defaultPromotion: '3 Kings Promotions',
+                post: postsToAnalyse[i],
+            });
+            events.push(event);
+            console.log(`     - AI found event via ${event.sourceType}: ${event.details}`);
+        });
+
+        return events;
     }
 };

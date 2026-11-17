@@ -1,41 +1,34 @@
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
+const { toIsoDate } = require('./utils/cleanEvents');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-function isUpcoming(details) {
-    // Drop dead links & 404 pages
-    if (details.toLowerCase().includes('page not found')) return false;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Looks for date patterns like "Oct 3" or "10/3"
-    const dateMatch = details.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}|\d{1,2}\/\d{1,2}/i);
-
-    if (dateMatch) {
-        const eventDate = new Date(`${dateMatch[0]} ${today.getFullYear()}`);
-        if (!isNaN(eventDate) && eventDate < today) {
-            return false; // Stale date, skip it
-        }
-    }
-    return true;
+// Dead links and 404 pages scraped by mistake.
+function isValid(details) {
+    return !details.toLowerCase().includes('page not found');
 }
 
 async function formatForBeehiiv() {
     try {
         console.log("Fetching upcoming events from Supabase...\n");
         
+        // Let the DATABASE do the filtering and sorting, using the clean
+        // event_date column (same rule as the upcoming_events view):
+        //   event_date >= today  OR  event_date is unknown (null)
+        // .or() takes PostgREST filter syntax: "column.operator.value", comma = OR.
+        const today = toIsoDate(new Date());
         const { data: events, error } = await supabase
             .from('events')
-            .select('*');
+            .select('*')
+            .or(`event_date.gte.${today},event_date.is.null`)
+            .order('event_date', { ascending: true, nullsFirst: false });
 
         if (error) throw error;
 
-        // Filters out past fights and invalid pages
-        const upcomingEvents = (events || []).filter(e => isUpcoming(e.details));
+        const upcomingEvents = (events || []).filter(e => isValid(e.details));
 
         if (upcomingEvents.length === 0) {
             console.log("No upcoming events found in the database.");
