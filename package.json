@@ -4,14 +4,17 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "dry-run": "node index.js --dry-run",
+    "newsletter": "node beehiiv-formatter.js",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "2.32.0",
     "@supabase/supabase-js": "^2.116.0",
     "apify-client": "^2.25.0",
     "axios": "^1.20.0",
