@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 
 const {
     cleanField, smartTitleCase, normalizeCity, normalizeState, normalizePromoter,
-    normalizeTime, normalizeUrl, cleanInstagramEvent, cleanWebEvent,
+    normalizeTime, normalizeUrl, cleanInstagramEvent, cleanListingEvent, cleanWebEvent,
 } = require('../utils/cleanEvents');
 const { dedupeEvents, planWrites } = require('../utils/dedupeEvents');
 
@@ -137,4 +137,62 @@ test('website text is tidied without being rewritten', () => {
     const wc = cleanWebEvent({ promotion: 'Warriors Cup', details: 'WARRIORS CUP 81 FRI, 10/23. 6PM LIC, NY.', url: 'https://example.com/wc81' }, { today: new Date(2026, 9, 1) });
     assert.equal(wc.details, 'Warriors Cup 81 Fri, 10/23. 6PM LIC, NY');
     assert.equal(wc.event_date, '2026-10-23');
+});
+
+test('an Eventbrite listing becomes one clean, standard record', () => {
+    // Trimmed copy of the schema.org data on the real Battle in the Basement 23 page.
+    const listing = {
+        '@type': 'SocialEvent',
+        name: 'Battle in the Basement 23',
+        url: 'https://www.eventbrite.com/e/battle-in-the-basement-23-tickets-2003210212671',
+        eventStatus: 'https://schema.org/EventScheduled',
+        location: {
+            '@type': 'Place', name: 'Church Street Boxing Gym',
+            address: { addressLocality: 'New York', addressRegion: 'NY', streetAddress: '25 Park Place, New York, NY 10007' },
+        },
+        organizer: { name: 'Church Street Boxing Gym' },
+        startDate: '2026-12-05T14:30:00-05:00',
+    };
+    const record = cleanListingEvent(listing, { defaultPromotion: 'Church Street Boxing Gym' });
+    assert.equal(record.details, 'Battle in the Basement 23 - Church Street Boxing Gym, New York, NY (December 5, 2026, 2:30 PM)');
+    assert.equal(record.event_date, '2026-12-05');   // read from the text, never shifted by timezone
+    assert.equal(record.url, listing.url);
+    assert.equal(record.hasTicketLink, true);
+
+    // Morning and midnight starts use the 12-hour clock correctly.
+    assert.equal(cleanListingEvent({ ...listing, startDate: '2026-12-05T09:05:00-05:00' }, {}).time, '9:05 AM');
+    assert.equal(cleanListingEvent({ ...listing, startDate: '2026-12-05T00:00:00-05:00' }, {}).time, '12:00 AM');
+});
+
+test('the Three Pillar shows page and the flyer become one event', () => {
+    // The real text block on threepillarpromotions.com/shows (no ticket button yet).
+    const site = cleanWebEvent({
+        promotion: 'Three Pillar Promotions',
+        details: 'WARRIORS SERIES IV 12/12. 530PM NY, NY.',
+        url: '',
+        pageUrl: 'https://www.threepillarpromotions.com/shows',
+    }, { today: TODAY });
+    assert.equal(site.event_date, '2026-12-12');
+    assert.equal(site.hasTicketLink, false);                                   // no button, so no ticket link
+    assert.equal(site.url, 'https://www.threepillarpromotions.com/shows');     // falls back to the shows page
+
+    const merged = dedupeEvents([warriorsFlyer, site]);
+    assert.equal(merged.length, 1);                                // same date + same promoter = same event
+    assert.equal(merged[0].details, warriorsFlyer.details);        // the more complete flyer wording wins
+    assert.equal(merged[0].url, warriorsFlyer.url);                // and a missing ticket link never replaces a link
+
+    // 'N/A' (what the old scraper sent) is not treated as a link either.
+    assert.equal(cleanWebEvent({ promotion: 'X', details: 'Show 12/12', url: 'N/A' }, { today: TODAY }).hasTicketLink, false);
+});
+
+test("a ticket link from the promoter's site replaces the flyer's Instagram link", () => {
+    const site = cleanWebEvent({
+        promotion: 'Three Pillar Promotions',
+        details: 'WARRIORS SERIES IV 12/12. 530PM NY, NY.',
+        url: 'https://www.ticketmaster.com/event/3B0065568E6424E4',
+        pageUrl: 'https://www.threepillarpromotions.com/shows',
+    }, { today: TODAY });
+    const [merged] = dedupeEvents([warriorsFlyer, site]);
+    assert.equal(merged.url, 'https://www.ticketmaster.com/event/3B0065568E6424E4'); // the real ticket page wins
+    assert.equal(merged.details, warriorsFlyer.details);                              // the flyer's wording stays
 });

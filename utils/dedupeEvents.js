@@ -49,7 +49,8 @@ function completeness(r) {
         + (r.city ? 1 : 0)
         + (r.time ? 1 : 0)
         + (r.hasTicketLink ? 1 : 0)
-        + (r.sourceType === 'Image' || r.sourceType === 'Sidecar' ? 1 : 0); // a flyer beats a caption
+        // a flyer or a ticketing listing beats a caption
+        + (['Image', 'Sidecar', 'Eventbrite'].includes(r.sourceType) ? 1 : 0);
 }
 
 const FILLABLE = ['eventName', 'venue', 'city', 'state', 'time'];
