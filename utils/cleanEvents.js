@@ -216,19 +216,74 @@ function cleanInstagramEvent(ai, { defaultPromotion, post, today = new Date() })
     return record;
 }
 
+// schema.org dates look like "2026-12-05T14:30:00-05:00" (ISO 8601: date, "T",
+// clock time, then the offset from UTC). We read the date and clock time straight
+// from the text with a regex instead of using `new Date(value)`: that would
+// convert to the timezone of whatever computer runs the scraper, and a 2:30 PM
+// New York show could show up as 7:30 PM on a server set to UTC.
+function splitIsoDateTime(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(cleanText(value));
+    if (!m) return { date: null, time: '' };
+    const date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (m[4] === undefined) return { date, time: '' };
+    const hour24 = Number(m[4]);
+    // 24-hour -> 12-hour clock: 14 -> 2 PM, 0 -> 12 AM, 12 -> 12 PM.
+    const time = `${hour24 % 12 || 12}:${m[5]} ${hour24 < 12 ? 'AM' : 'PM'}`;
+    return { date, time };
+}
+
+// A ticketing-site listing (Eventbrite) -> one clean event record.
+// These pages embed STRUCTURED DATA: a JSON block in schema.org's standard
+// "Event" format, which they publish for Google search results. Every field is
+// already labelled (name, startDate, location...), so unlike a flyer there's no
+// AI step and no guessing: we only clean and standardise each field.
+//   listing:          the parsed schema.org Event object
+//   defaultPromotion: label to use if the listing names no organizer
+function cleanListingEvent(listing, { defaultPromotion, source = 'Eventbrite' }) {
+    const place = listing.location || {};
+    const address = place.address || {};
+    const organizer = normalizePromoter(listing.organizer?.name);
+    const { date, time } = splitIsoDateTime(listing.startDate);
+    const url = normalizeUrl(listing.url);
+
+    const record = {
+        promotion: defaultPromotion || organizer,
+        promoterFromFlyer: Boolean(organizer), // named by the source itself, not guessed
+        eventName: smartTitleCase(cleanField(listing.name)),
+        venue: smartTitleCase(cleanField(place.name)),
+        city: normalizeCity(address.addressLocality),
+        state: normalizeState(address.addressRegion),
+        time,
+        event_date: date ? toIsoDate(date) : null,
+        url,
+        hasTicketLink: Boolean(url),
+        sourceType: source,
+        sourceUrl: url,
+    };
+    record.details = buildDetails({ ...record, date });
+    return record;
+}
+
 // Website scrapers give us one line of text; we can only tidy it, not split it.
+//   raw.url:     the ticket link, if the site has one ('' or 'N/A' when it doesn't)
+//   raw.pageUrl: the page the text came from, used as the link when there's no ticket link
 function cleanWebEvent(raw, { today = new Date() } = {}) {
     const details = smartTitleCase(cleanText(raw.details));
     const date = parseEventDate(details, today);
+    // Same rule as Instagram records: it only counts as a ticket link if it points
+    // at a specific page. Before this, every website record claimed to have one,
+    // so a missing link ('N/A') could replace a real one when records merged.
+    const ticketUrl = normalizeUrl(raw.url);
+    const link = ticketUrl || cleanField(raw.pageUrl) || cleanField(raw.url);
     return {
         promotion: normalizePromoter(raw.promotion) || cleanText(raw.promotion),
         promoterFromFlyer: true,
         eventName: '', venue: '', city: '', state: '', time: '',
         event_date: date ? toIsoDate(date) : null,
-        url: raw.url,
-        hasTicketLink: true,
+        url: link,
+        hasTicketLink: Boolean(ticketUrl),
         sourceType: 'Website',
-        sourceUrl: raw.url,
+        sourceUrl: cleanField(raw.pageUrl) || link,
         details,
     };
 }
@@ -236,5 +291,5 @@ function cleanWebEvent(raw, { today = new Date() } = {}) {
 module.exports = {
     cleanText, cleanField, isPlaceholder, smartTitleCase, comparisonKey,
     normalizeState, normalizeCity, normalizePromoter, normalizeTime, normalizeUrl,
-    buildDetails, toIsoDate, cleanInstagramEvent, cleanWebEvent,
+    buildDetails, toIsoDate, cleanInstagramEvent, cleanListingEvent, cleanWebEvent,
 };
