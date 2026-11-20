@@ -1,6 +1,3 @@
-// tests/newsletter.test.js
-// Checks the beehiiv newsletter layout. Run with:  npm test
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildNewsletter, monthLabel } = require('../beehiiv-formatter');

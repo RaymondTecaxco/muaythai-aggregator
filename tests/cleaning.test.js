@@ -1,10 +1,5 @@
-// tests/cleaning.test.js
-// Automated checks for the data-cleaning and deduplication rules.
-// Run with:  npm test
-//
-// Each test feeds in a REAL messy value we've seen from Gemini or a promoter's
-// site and states the clean value we expect. If someone later changes a rule
-// and breaks an old case, the test fails and says exactly which value changed.
+// Cleaning and dedupe rules. Inputs are real values seen from Gemini and
+// promoter sites.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -15,7 +10,7 @@ const {
 } = require('../utils/cleanEvents');
 const { dedupeEvents, planWrites } = require('../utils/dedupeEvents');
 
-const TODAY = new Date(2026, 10, 17); // 17 Nov 2026 (months count from 0)
+const TODAY = new Date(2026, 10, 17); // Nov 17, 2026
 
 test('placeholders become empty values', () => {
     for (const value of ['TBD', 'tba', 'N/A', 'Unknown', 'Location TBD', 'Upcoming Event', '  ']) {

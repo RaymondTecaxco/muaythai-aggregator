@@ -3,7 +3,6 @@ const { time } = require('../utils/timer');
 const { analyzeInstagramPost, isImagePost } = require('../utils/instagram');
 const { cleanInstagramEvent } = require('../utils/cleanEvents');
 
-// Initialize API Clients
 const apifyClient = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
 
 module.exports = {
@@ -19,13 +18,11 @@ module.exports = {
         const profileData = items[0];
         if (!profileData || !profileData.latestPosts) return [];
 
-        // Only image posts can be flyers for this account.
+        // this account only announces events with image flyers
         const recentPosts = profileData.latestPosts.slice(0, 5).filter(isImagePost);
 
         console.log(`  -> [Phase 2] Analysing ${recentPosts.length} image post(s) (cached ones are skipped)...`);
 
-        // Start every post at once; the shared rate limiter in utils/gemini.js
-        // decides when each Gemini call may actually go out.
         const results = await Promise.all(recentPosts.map(async (post) => {
             try {
                 return await analyzeInstagramPost(post);
@@ -35,9 +32,8 @@ module.exports = {
             }
         }));
 
-        // Clean each answer into the standard event shape. The flyer's own
-        // promoter wins; this account's name is only the fallback label, because
-        // the gym often reposts other promotions' shows its fighters are on.
+        // The gym reposts other promotions' shows, so the promoter on the flyer
+        // takes priority over the account name.
         const events = [];
         results.forEach((aiData, i) => {
             if (!aiData || !aiData.isEvent) return;

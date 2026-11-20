@@ -1,25 +1,13 @@
-// utils/cleanEvents.js
-// DATA CLEANING: turn messy, inconsistently formatted event data into one
-// standard shape, so the same real-world event always produces the same text.
-//
-// Gemini (and promoters' websites) give us values like:
-//   "Madison SQUARE GARDEN", "The Bronx", "New York", "6PM", "TBD",
-//   "ThreePillarPromotions", "www.ticketmaster.com", "(December 12.)"
-// Each helper below fixes ONE kind of mess. Small, single-purpose functions are
-// easy to test (see tests/cleaning.test.js) and easy to extend when a new
-// messy value shows up.
+// Normalizes scraped event fields so the same event always produces the same
+// record. Typical input: "Madison SQUARE GARDEN", "The Bronx", "6PM", "TBD",
+// "ThreePillarPromotions", "www.ticketmaster.com", "(December 12.)".
 
 const { parseEventDate } = require('./filterEvents');
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
 
-// ---------------------------------------------------------------------------
-// 1. Basic text hygiene
-// ---------------------------------------------------------------------------
-
-// Collapse runs of spaces/newlines, drop stray "@" from Instagram handles,
-// and trim punctuation left dangling at either end ("(December 12.)" -> "December 12").
+// "(December 12.)" -> "December 12"
 function cleanText(value) {
     if (typeof value !== 'string') return '';
     return value
@@ -29,34 +17,26 @@ function cleanText(value) {
         .trim();
 }
 
-// Words that mean "we don't know". Storing them would look like real data,
-// so we turn them into an empty string (a missing value) instead.
+// Treated as missing so they don't end up stored as if they were real values.
 const PLACEHOLDERS = /^(tbd|tba|n\/?a|none|null|unknown|not (stated|specified|provided)|location tbd|venue tbd|time tbd|upcoming event|next event|new event|event)$/i;
 
 function isPlaceholder(value) {
     return value === '' || PLACEHOLDERS.test(value);
 }
 
-// cleanText + placeholder check in one step: returns '' for "no real value".
 function cleanField(value) {
     const text = cleanText(value);
     return isPlaceholder(text) ? '' : text;
 }
 
-// ---------------------------------------------------------------------------
-// 2. Consistent capitalisation
-// ---------------------------------------------------------------------------
-
-// Abbreviations that must stay in capitals.
 const ACRONYMS = new Set(['NY', 'NJ', 'CT', 'PA', 'NYC', 'LIC', 'USA', 'US', 'MMA', 'WBC',
     'IKF', 'ISKA', 'WKA', 'PRO', 'AM', 'PM', 'UFC', 'RFC', 'MSG']);
 const SMALL_WORDS = new Set(['of', 'at', 'the', 'in', 'and', 'vs', 'on', 'for', 'a', 'an', 'to']);
-// Roman numerals such as IV, XII ("Warriors Series IV").
+// for show numbers like "Warriors Series IV"
 const ROMAN = /^(?=[MDCLXVI])M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/;
 
-// Only words written ENTIRELY in capitals are rewritten ("SQUARE" -> "Square").
-// Words that already have mixed case ("McDonald", "iPhone") are left alone,
-// because their capitalisation is probably deliberate.
+// Only rewrites ALL-CAPS words. Mixed case like "McDonald" is probably
+// intentional, so it's left alone.
 function smartTitleCase(text) {
     return text.split(' ').map((word, i) => {
         const letters = word.replace(/[^A-Za-z]/g, '');
@@ -64,22 +44,16 @@ function smartTitleCase(text) {
         if (/\d/.test(word)) return word;                       // "6PM", "24TH", "3KINGS"
         const bare = letters.toUpperCase();
         if (ACRONYMS.has(bare) || ROMAN.test(bare)) return word.toUpperCase();
-        if (letters !== bare) {                                 // not ALL CAPS
+        if (letters !== bare) {
             return i > 0 && SMALL_WORDS.has(word.toLowerCase()) ? word.toLowerCase() : word;
         }
         const lower = word.toLowerCase();
         if (i > 0 && SMALL_WORDS.has(lower)) return lower;
-        // Capitalise the first letter (keeps punctuation like "(" or "'" in place).
         return lower.replace(/[a-z]/, c => c.toUpperCase());
     }).join(' ');
 }
 
-// ---------------------------------------------------------------------------
-// 3. Standard values for places, promoters and times
-// ---------------------------------------------------------------------------
-
-// "Lookup tables" (also called mapping or alias tables): many spellings -> one standard value.
-// Keys are written in "comparison form" (see comparisonKey below).
+// Keys are in comparisonKey() form.
 const STATE_CODES = {
     'new york': 'NY', 'ny': 'NY', 'new jersey': 'NJ', 'nj': 'NJ',
     'connecticut': 'CT', 'ct': 'CT', 'pennsylvania': 'PA', 'pa': 'PA',
@@ -97,9 +71,8 @@ const PROMOTER_ALIASES = {
     'freedom fighter promotions': 'Freedom Fighter Promotions', 'freedom fighters': 'Freedom Fighter Promotions',
 };
 
-// "Comparison form": lowercase, letters/digits/spaces only. Two values that
-// differ only in capitals or punctuation ("Madison SQUARE GARDEN!" vs
-// "madison square garden") get the same comparison form.
+// Lowercase, alphanumerics only, for matching values that differ only in
+// case or punctuation.
 function comparisonKey(value) {
     return cleanText(value).toLowerCase()
         .replace(/[^a-z0-9 ]/g, ' ')
@@ -117,16 +90,16 @@ function normalizeCity(value) {
     return CITY_ALIASES[comparisonKey(city)] || smartTitleCase(city);
 }
 
-// A flyer may name several promoters ("ThreePillarPromotions and rfc.promotions").
-// Split them, standardise each one, and join them back with " & ".
+// Flyers can name several promoters: "ThreePillarPromotions and rfc.promotions"
+// -> "Three Pillar Promotions & RFC Promotions"
 function normalizePromoter(value) {
-    const raw = cleanField(value).replace(/\.(?=[a-z])/gi, ' '); // "rfc.promotions" -> "rfc promotions"
+    const raw = cleanField(value).replace(/\.(?=[a-z])/gi, ' '); // handles like rfc.promotions
     if (!raw) return '';
     return raw.split(/\s*(?:&|\band\b|,|\/|\+)\s*/i)
         .map(part => cleanField(part))
         .filter(Boolean)
         .map(part => PROMOTER_ALIASES[comparisonKey(part)] || smartTitleCase(part))
-        .filter((part, i, all) => all.indexOf(part) === i) // drop repeats
+        .filter((part, i, all) => all.indexOf(part) === i)
         .join(' & ');
 }
 
@@ -139,14 +112,14 @@ function normalizeTime(value) {
     return `${hour}:${match[2] || '00'} ${match[3].toUpperCase()}M`;
 }
 
-// Keep a link only if it points at a specific page. A bare homepage such as
-// "www.ticketmaster.com" doesn't help a reader find THIS event.
+// Bare homepages ("www.ticketmaster.com") are dropped; they don't point to
+// the event.
 function normalizeUrl(value) {
     let text = cleanField(value);
     if (!text) return '';
     if (!/^https?:\/\//i.test(text)) text = `https://${text}`;
     try {
-        const url = new URL(text); // throws if the text isn't a valid web address
+        const url = new URL(text);
         if (!url.hostname.includes('.')) return '';
         if (url.pathname === '/' && !url.search) return '';
         return url.toString();
@@ -154,10 +127,6 @@ function normalizeUrl(value) {
         return '';
     }
 }
-
-// ---------------------------------------------------------------------------
-// 4. Building the final, consistent "details" text
-// ---------------------------------------------------------------------------
 
 function formatDate(date) {
     return `${MONTH_NAMES[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
@@ -168,34 +137,26 @@ function toIsoDate(date) {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// One template for every event:
-//   "Event Name - Venue, City, ST (Month D, YYYY, H:MM PM)"
-// Parts that are missing are simply left out, never written as "TBD".
+// "Event Name - Venue, City, ST (Month D, YYYY, H:MM PM)", skipping missing parts
 function buildDetails({ eventName, promotion, venue, city, state, date, time }) {
     const name = eventName || `${promotion} Event`;
     const place = [venue, city, state].filter(Boolean)
-        // drop a part that just repeats the one before it ("New York, NY" stays,
-        // but "Bronx, Bronx" doesn't happen)
+        // avoid "Bronx, Bronx"
         .filter((part, i, all) => i === 0 || comparisonKey(part) !== comparisonKey(all[i - 1]))
         .join(', ');
     const when = [date ? formatDate(date) : '', time].filter(Boolean).join(', ');
     return `${name}${place ? ` - ${place}` : ''}${when ? ` (${when})` : ''}`;
 }
 
-// ---------------------------------------------------------------------------
-// 5. Entry points used by the scrapers
-// ---------------------------------------------------------------------------
-
-// Gemini's structured answer for one Instagram post -> one clean event record.
-//   defaultPromotion: label to use when the flyer doesn't name a promoter
-//   post:             the Instagram post (for its link, type and caption)
+// Gemini's answer for one Instagram post -> event record.
+// defaultPromotion is used when the flyer doesn't name a promoter.
 function cleanInstagramEvent(ai, { defaultPromotion, post, today = new Date() }) {
     const promoter = normalizePromoter(ai.promoter);
     const promotion = promoter || defaultPromotion;
     const date = parseEventDate(cleanText(ai.date), today);
 
     let eventName = smartTitleCase(cleanField(ai.eventName));
-    // A name that's only the promoter or a generic phrase isn't a real event name.
+    // the promoter's name on its own isn't an event name
     if (comparisonKey(eventName) === comparisonKey(promotion)) eventName = '';
 
     const record = {
@@ -209,36 +170,28 @@ function cleanInstagramEvent(ai, { defaultPromotion, post, today = new Date() })
         event_date: date ? toIsoDate(date) : null,
         url: normalizeUrl(ai.ticketUrl) || post.url,
         hasTicketLink: Boolean(normalizeUrl(ai.ticketUrl)),
-        sourceType: post.type,             // "Image" / "Sidecar" flyer, or "Video" caption
+        sourceType: post.type,             // Image / Sidecar (flyer) or Video (caption only)
         sourceUrl: post.url,
     };
     record.details = buildDetails({ ...record, date });
     return record;
 }
 
-// schema.org dates look like "2026-12-05T14:30:00-05:00" (ISO 8601: date, "T",
-// clock time, then the offset from UTC). We read the date and clock time straight
-// from the text with a regex instead of using `new Date(value)`: that would
-// convert to the timezone of whatever computer runs the scraper, and a 2:30 PM
-// New York show could show up as 7:30 PM on a server set to UTC.
+// "2026-12-05T14:30:00-05:00" -> date + "2:30 PM". Parsed from the text on
+// purpose: new Date() would shift it into the machine's timezone, so a 2:30 PM
+// show could come out as 7:30 PM on a UTC server.
 function splitIsoDateTime(value) {
     const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/.exec(cleanText(value));
     if (!m) return { date: null, time: '' };
     const date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (m[4] === undefined) return { date, time: '' };
     const hour24 = Number(m[4]);
-    // 24-hour -> 12-hour clock: 14 -> 2 PM, 0 -> 12 AM, 12 -> 12 PM.
     const time = `${hour24 % 12 || 12}:${m[5]} ${hour24 < 12 ? 'AM' : 'PM'}`;
     return { date, time };
 }
 
-// A ticketing-site listing (Eventbrite) -> one clean event record.
-// These pages embed STRUCTURED DATA: a JSON block in schema.org's standard
-// "Event" format, which they publish for Google search results. Every field is
-// already labelled (name, startDate, location...), so unlike a flyer there's no
-// AI step and no guessing: we only clean and standardise each field.
-//   listing:          the parsed schema.org Event object
-//   defaultPromotion: label to use if the listing names no organizer
+// schema.org Event (from an Eventbrite page's JSON-LD) -> event record.
+// The fields are already labeled, so no Gemini call is needed here.
 function cleanListingEvent(listing, { defaultPromotion, source = 'Eventbrite' }) {
     const place = listing.location || {};
     const address = place.address || {};
@@ -248,7 +201,7 @@ function cleanListingEvent(listing, { defaultPromotion, source = 'Eventbrite' })
 
     const record = {
         promotion: defaultPromotion || organizer,
-        promoterFromFlyer: Boolean(organizer), // named by the source itself, not guessed
+        promoterFromFlyer: Boolean(organizer),
         eventName: smartTitleCase(cleanField(listing.name)),
         venue: smartTitleCase(cleanField(place.name)),
         city: normalizeCity(address.addressLocality),
@@ -264,15 +217,14 @@ function cleanListingEvent(listing, { defaultPromotion, source = 'Eventbrite' })
     return record;
 }
 
-// Website scrapers give us one line of text; we can only tidy it, not split it.
-//   raw.url:     the ticket link, if the site has one ('' or 'N/A' when it doesn't)
-//   raw.pageUrl: the page the text came from, used as the link when there's no ticket link
+// Website scrapers only give one line of text, so this tidies it without
+// splitting it into fields. raw.url is the ticket link ('' or 'N/A' if none);
+// raw.pageUrl is the fallback link.
 function cleanWebEvent(raw, { today = new Date() } = {}) {
     const details = smartTitleCase(cleanText(raw.details));
     const date = parseEventDate(details, today);
-    // Same rule as Instagram records: it only counts as a ticket link if it points
-    // at a specific page. Before this, every website record claimed to have one,
-    // so a missing link ('N/A') could replace a real one when records merged.
+    // Has to be a real link; otherwise 'N/A' could win over a real ticket
+    // link when records merge.
     const ticketUrl = normalizeUrl(raw.url);
     const link = ticketUrl || cleanField(raw.pageUrl) || cleanField(raw.url);
     return {
