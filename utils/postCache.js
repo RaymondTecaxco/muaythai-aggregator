@@ -1,39 +1,31 @@
-// utils/postCache.js
-// Remembers what Gemini said about each Instagram post, so we never pay
-// (in time or free-tier quota) to ask about the same post twice.
+// Caches Gemini results on disk so a post is only ever sent once.
 //
-// The cache is a plain JSON file on disk: { "<key>": { result, cachedAt } }.
-// Keys come in two flavours:
-//   "post:<shortCode>"   - Instagram's unique ID for a post. Checked FIRST, before
-//                          we even download the image.
-//   "content:<sha256>"   - a fingerprint (hash) of exactly what we'd show Gemini
-//                          (caption + image bytes). Catches the same flyer or
-//                          caption re-posted under a different post / account.
+// Two kinds of keys:
+//   post:<shortCode>  checked first, before downloading the image
+//   content:<sha256>  hash of caption + image, catches the same flyer
+//                     reposted by another account
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { addCount } = require('./timer');
 
-// POST_CACHE_FILE lets tests point at a throwaway file instead of the real cache.
+// tests set POST_CACHE_FILE to a temp file
 const CACHE_FILE = process.env.POST_CACHE_FILE || path.join(__dirname, '..', '.cache', 'gemini-results.json');
 
-let store = null;           // the loaded JSON object; null until first use
-const inFlight = new Map(); // key -> Promise for Gemini calls that are running right now
+let store = null;
+const inFlight = new Map();
 
-// Lazy loading: read the file the first time someone needs it, not at require() time.
 function load() {
     if (store) return store;
     try {
         store = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
     } catch {
-        store = {}; // no file yet (first run) or unreadable -> start empty
+        store = {}; // first run, or the file is unreadable
     }
     return store;
 }
 
-// SHA-256 turns any input (text or bytes) into a 64-character fingerprint.
-// Same input -> always the same fingerprint; change one byte -> a totally different one.
 function sha256(data) {
     return crypto.createHash('sha256').update(data).digest('hex');
 }
@@ -47,9 +39,7 @@ function set(key, result) {
     load()[key] = { result, cachedAt: new Date().toISOString() };
 }
 
-// Return the cached result for `key`, or run `compute()` to produce it and save it.
-// If two posts with identical content are being processed at the same moment,
-// they share ONE compute() call instead of both calling Gemini ("promise memoization").
+// Concurrent requests for the same key share one in-flight call.
 async function getOrCompute(key, compute) {
     const cached = get(key);
     if (cached !== undefined) {
@@ -62,7 +52,7 @@ async function getOrCompute(key, compute) {
     }
 
     const promise = compute().then(result => {
-        set(key, result); // only reached on success, so failures are never cached
+        set(key, result); // failures aren't cached
         return result;
     });
     inFlight.set(key, promise);
@@ -73,7 +63,7 @@ async function getOrCompute(key, compute) {
     }
 }
 
-// Write everything back to disk once, at the end of the run.
+// called once at the end of a run
 function save() {
     if (!store) return;
     fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });

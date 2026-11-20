@@ -21,7 +21,7 @@ function parseEventDate(text, today = new Date()) {
         day = Number(named[2]);
         year = named[3] ? Number(named[3]) : null;
     } else if (numeric) {
-        month = Number(numeric[1]) - 1; // JS months count from 0 (January = 0)
+        month = Number(numeric[1]) - 1;
         day = Number(numeric[2]);
         year = numeric[3] ? Number(numeric[3].length === 2 ? `20${numeric[3]}` : numeric[3]) : null;
     } else {
@@ -29,22 +29,21 @@ function parseEventDate(text, today = new Date()) {
     }
 
     if (year === null) {
-        // No year written. Pick the year that puts the date CLOSEST to today:
-        // in November, "January 23" means next January, while "November 14"
-        // means last week. More than half a year away -> shift by one year.
+        // No year given, so use whichever year puts the date closest to today.
+        // Otherwise "January 23" read in November lands in the past.
         year = today.getFullYear();
         const guess = new Date(year, month, day);
-        if (guess - today > HALF_YEAR_MS) year -= 1;      // e.g. "Dec 28" read in early January
-        else if (today - guess > HALF_YEAR_MS) year += 1; // e.g. "Jan 23" read in November
+        if (guess - today > HALF_YEAR_MS) year -= 1;
+        else if (today - guess > HALF_YEAR_MS) year += 1;
     }
 
     const date = new Date(year, month, day);
-    // new Date() quietly rolls "Feb 31" over into March; reject impossible dates.
+    // Date rolls Feb 31 over into March instead of failing
     if (date.getMonth() !== month || date.getDate() !== day) return null;
     return date;
 }
 
-// Format using LOCAL date parts, so time zones can never shift the day.
+// local date parts, so the timezone can't shift the day
 function toIsoDate(date) {
     const pad = n => String(n).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -57,8 +56,7 @@ function formatAndFilterEvents(events) {
     const processedEvents = [];
 
     events.forEach(event => {
-        // Records from utils/cleanEvents.js already carry a clean ISO date
-        // ("2027-01-23"); otherwise, find the date inside the text.
+        // cleaned records already have event_date; older ones need it parsed from text
         const textToSearch = event.details || event.caption || "";
         const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(event.event_date || '');
         const eventDate = iso
@@ -73,7 +71,7 @@ function formatAndFilterEvents(events) {
             event.event_date = toIsoDate(eventDate);
         }
 
-        // No date found -> keep the event (date unknown), as before.
+        // undated events are kept
         processedEvents.push(event);
     });
 

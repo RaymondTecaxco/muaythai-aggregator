@@ -1,13 +1,9 @@
-// beehiiv-formatter.js
-// Turns the upcoming events in Supabase into a newsletter section for beehiiv.
-// Run with:  npm run newsletter
+// Builds the upcoming-events section of the newsletter (npm run newsletter).
 //
-// It produces two versions of the same content:
-//   1. output/beehiiv-newsletter.html, opened in your browser automatically.
-//      Press Ctrl+A, then Ctrl+C, and paste into the beehiiv editor. Copying from a
-//      browser puts RICH TEXT on the clipboard (headings, bold and clickable
-//      links), and beehiiv keeps that formatting when you paste.
-//   2. A plain-text version printed in the terminal, as a backup.
+// Writes output/beehiiv-newsletter.html and opens it in the browser. Copying
+// from the browser keeps headings, bold and links when pasted into beehiiv,
+// which copying plain text doesn't. A plain-text version is also printed to
+// the terminal as a fallback.
 
 require('dotenv').config();
 const fs = require('fs');
@@ -20,27 +16,24 @@ const OUTPUT_FILE = path.join(__dirname, 'output', 'beehiiv-newsletter.html');
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
 
-// Dead links and 404 pages scraped by mistake.
+// filters out 404 pages that got scraped as events
 function isValid(details) {
     return Boolean(details) && !details.toLowerCase().includes('page not found');
 }
 
-// "2026-12-05" -> "December 2026". Events with no date get their own group.
+// "2026-12-05" -> "December 2026"
 function monthLabel(isoDate) {
     if (!isoDate) return 'Date to be announced';
     const [year, month] = isoDate.split('-').map(Number);
     return `${MONTH_NAMES[month - 1]} ${year}`;
 }
 
-// Instagram links lead to the flyer, not a ticket page, so say what the reader gets.
+// Instagram links go to the flyer, not tickets, so label them differently.
 function linkLabel(url) {
     return /instagram\.com/i.test(url) ? '📸 See the flyer' : '🎟️ Tickets & Info';
 }
 
-// HTML ESCAPING: characters like & and < have special meanings in HTML.
-// "Three Pillar Promotions & RFC Promotions" must be written as "&amp;", or a
-// browser could misread it. Text that came from a scraped website must always be
-// escaped before it goes into HTML.
+// All scraped text goes through this before it's put in the HTML.
 function escapeHtml(text) {
     return String(text)
         .replace(/&/g, '&amp;')
@@ -49,8 +42,8 @@ function escapeHtml(text) {
         .replace(/"/g, '&quot;');
 }
 
-// Group events by month, keeping their order (they arrive sorted by date).
-// A Map remembers insertion order, so the months stay in date order too.
+// Events arrive sorted by date, and Map keeps insertion order, so the
+// months come out in order too.
 function groupByMonth(events) {
     const groups = new Map();
     for (const event of events) {
@@ -61,8 +54,7 @@ function groupByMonth(events) {
     return groups;
 }
 
-// A PURE FUNCTION: same events in, same text out, with no database or files
-// involved. That's what makes it easy to test (see tests/newsletter.test.js).
+// Kept free of I/O so it can be unit tested.
 function buildNewsletter(events) {
     const groups = groupByMonth(events);
     const html = [];
@@ -97,7 +89,6 @@ ${bodyHtml}
     fs.writeFileSync(OUTPUT_FILE, page, 'utf8');
 }
 
-// Open a file in the default browser. Each operating system has its own command.
 function openInBrowser(file) {
     const command = process.platform === 'win32' ? `start "" "${file}"`
         : process.platform === 'darwin' ? `open "${file}"`
@@ -112,10 +103,7 @@ async function formatForBeehiiv() {
         console.log("Fetching upcoming events from Supabase...\n");
         const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-        // Let the DATABASE do the filtering and sorting, using the clean
-        // event_date column (same rule as the upcoming_events view):
-        //   event_date >= today  OR  event_date is unknown (null)
-        // .or() takes PostgREST filter syntax: "column.operator.value", comma = OR.
+        // same rule as the upcoming_events view: today or later, or no date yet
         const today = toIsoDate(new Date());
         const { data: events, error } = await supabase
             .from('events')
@@ -149,8 +137,7 @@ async function formatForBeehiiv() {
     }
 }
 
-// Only run when started directly (npm run newsletter), not when a test
-// require()s this file to check buildNewsletter.
+// don't hit Supabase when the tests require this file
 if (require.main === module) {
     formatForBeehiiv();
 }

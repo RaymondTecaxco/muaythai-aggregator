@@ -1,62 +1,47 @@
-// utils/dedupeEvents.js
-// RECORD LINKAGE (also called entity resolution): deciding when two records
-// describe the same real-world event, even though they're worded differently,
-// then MERGING them into one "golden record" that keeps the best of each.
+// Merges records that describe the same event and matches them to rows
+// already in Supabase.
 //
-// Our rule for "same event":
-//   same event_date   AND   ( same promotion  OR  same venue  OR  same event name )
-// Different events on the same night (e.g. two NYC shows on one Saturday) stay
-// separate because they differ in promotion, venue AND name.
+// Two records are the same event if they share a date AND the promotion,
+// venue or event name. Two different shows on the same night won't match
+// on all three.
 
 const { comparisonKey, buildDetails } = require('./cleanEvents');
 
-// ---------------------------------------------------------------------------
-// Matching
-// ---------------------------------------------------------------------------
-
-// Two venue names match if one contains the other:
-// "Infosys Theater at Madison Square Garden" contains "Madison Square Garden".
+// "Infosys Theater at Madison Square Garden" matches "Madison Square Garden"
 function sameVenue(a, b) {
     const ka = comparisonKey(a);
     const kb = comparisonKey(b);
-    if (!ka || !kb) return false;               // unknown venue never matches
+    if (!ka || !kb) return false;
     return ka.includes(kb) || kb.includes(ka);
 }
 
 function samePromotion(a, b) {
-    // Compare only the FIRST promoter, so "Three Pillar Promotions & RFC Promotions"
-    // still matches "Three Pillar Promotions".
+    // first promoter only, so co-promoted shows still match
     const first = p => comparisonKey(String(p).split(' & ')[0]);
     return Boolean(a && b) && first(a) === first(b);
 }
 
 function sameEvent(a, b) {
-    if (!a.event_date || a.event_date !== b.event_date) return false; // no date -> can't be sure
+    if (!a.event_date || a.event_date !== b.event_date) return false; // never merge undated records
     return samePromotion(a.promotion, b.promotion)
         || sameVenue(a.venue, b.venue)
         || (Boolean(a.eventName) && comparisonKey(a.eventName) === comparisonKey(b.eventName));
 }
 
-// ---------------------------------------------------------------------------
-// Merging: score how complete each record is, keep the best, fill its gaps
-// ---------------------------------------------------------------------------
-
-// A simple "data quality score": more known fields = more useful record.
+// Decides which record in a group wins the merge.
 function completeness(r) {
     return (r.eventName ? 3 : 0)
-        + (r.promoterFromFlyer ? 2 : 0)   // named on the flyer beats our account-based guess
+        + (r.promoterFromFlyer ? 2 : 0)   // printed on the flyer, not inferred from the account
         + (r.venue ? 2 : 0)
         + (r.city ? 1 : 0)
         + (r.time ? 1 : 0)
         + (r.hasTicketLink ? 1 : 0)
-        // a flyer or a ticketing listing beats a caption
         + (['Image', 'Sidecar', 'Eventbrite'].includes(r.sourceType) ? 1 : 0);
 }
 
 const FILLABLE = ['eventName', 'venue', 'city', 'state', 'time'];
 
-// "Coalescing": start from the best record, and for every field it's missing,
-// take the value from the next-best record that has one.
+// Start from the most complete record and fill its gaps from the others.
 function mergeGroup(group) {
     const ranked = [...group].sort((a, b) => completeness(b) - completeness(a));
     const merged = { ...ranked[0] };
@@ -73,8 +58,7 @@ function mergeGroup(group) {
         merged.url = withTicket.url;
         merged.hasTicketLink = true;
     }
-    // Website records keep their own wording; for the rest, rebuild the
-    // standard text from the merged fields.
+    // website records keep their original text
     if (merged.sourceType !== 'Website') {
         const [y, m, d] = (merged.event_date || '').split('-').map(Number);
         merged.details = buildDetails({ ...merged, date: y ? new Date(y, m - 1, d) : null });
@@ -83,7 +67,6 @@ function mergeGroup(group) {
     return merged;
 }
 
-// Group records that describe the same event, then merge each group.
 function dedupeEvents(records) {
     const groups = [];
     for (const record of records) {
@@ -101,13 +84,8 @@ function dedupeEvents(records) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Matching against rows ALREADY in Supabase (so a new run updates a row
-// instead of inserting a duplicate of it)
-// ---------------------------------------------------------------------------
-
-// Existing rows only have promotion / details / url / event_date, so for them
-// we look for the new event's venue or name INSIDE the stored details text.
+// Stored rows only have promotion, details, url and event_date, so venue and
+// name are matched against the details text instead.
 function matchesExistingRow(event, row) {
     if (!event.event_date || event.event_date !== row.event_date) return false;
     const rowText = comparisonKey(row.details);
@@ -117,8 +95,7 @@ function matchesExistingRow(event, row) {
         || comparisonKey(event.details) === rowText;
 }
 
-// Only these columns exist in the `events` table; everything else is
-// working data for cleaning and matching and must not be sent to Supabase.
+// The events table's columns; the other fields are only used for matching.
 function toRow(event) {
     return {
         promotion: event.promotion,
@@ -128,8 +105,7 @@ function toRow(event) {
     };
 }
 
-// Decide, for each event, whether to INSERT it, UPDATE an existing row, or
-// leave that row alone because nothing changed.
+// Sorts each event into insert, update or unchanged.
 function planWrites(events, existingRows) {
     const plan = { inserts: [], updates: [], unchanged: [], warnings: [] };
     const claimed = new Set();
@@ -139,7 +115,7 @@ function planWrites(events, existingRows) {
             plan.inserts.push(toRow(event));
             continue;
         }
-        const target = matches[0]; // lowest id = the oldest row for this event
+        const target = matches[0]; // oldest row (rows come back sorted by id)
         claimed.add(target.id);
         if (matches.length > 1) {
             plan.warnings.push(`Rows ${matches.map(m => m.id).join(', ')} all look like "${event.details}". Updating ${target.id}; consider deleting the others.`);

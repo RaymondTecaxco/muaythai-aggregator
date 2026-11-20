@@ -1,18 +1,8 @@
-// utils/timer.js
-// A tiny "stopwatch registry" used to measure where the pipeline spends its time.
-//
-// How it works:
-//   - time(label, fn) runs fn, measures how long it took, and adds that duration
-//     to a running total stored under `label` (e.g. "gemini.call").
-//   - addCount(label, n) keeps a plain counter (e.g. bytes of images downloaded).
-//   - printReport() prints one table with every label: how many times it ran,
-//     total seconds, average, and the slowest single run.
+// Per-stage timing for the pipeline. Wrap a step in time('label', fn) and
+// printReport() shows calls, total, average and max for each label.
 
-// performance.now() is a high-resolution clock meant for measuring durations.
-// Unlike Date.now(), it never jumps if the computer's clock is adjusted.
 const { performance } = require('node:perf_hooks');
 
-// A Map is a key -> value store. Key = stage label, value = running stats.
 const stats = new Map();
 const counters = new Map();
 
@@ -24,9 +14,7 @@ function record(label, ms) {
     stats.set(label, s);
 }
 
-// `fn` is an async function (it returns a Promise). We await it so we measure
-// the full time until its work is really finished, not just until it starts.
-// `try...finally` makes sure we record the time even if fn throws an error.
+// records the duration even if fn throws
 async function time(label, fn) {
     const start = performance.now();
     try {

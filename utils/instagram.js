@@ -1,28 +1,20 @@
-// utils/instagram.js
-// Shared steps for "read one Instagram post with Gemini", used by every
-// Instagram scraper. The order matters for speed:
-//   1. Seen this exact post before?           -> answer instantly, no download, no AI.
-//   2. Download the image (if any) and fingerprint caption + image.
-//   3. Seen this exact content before?        -> reuse that answer, no AI.
-//   4. Otherwise ask Gemini, then remember the answer under both keys.
+// Reads one Instagram post with Gemini, checking the cache by post ID before
+// downloading anything and by content hash before calling the API.
 
 const cache = require('./postCache');
 const { askGemini, downloadImage } = require('./gemini');
 const { addCount } = require('./timer');
 const { toIsoDate } = require('./cleanEvents');
 
-// Bump this whenever the prompt or the answer's shape changes. Cached answers
-// stored under an older version are then ignored (not deleted), so the next run
-// asks Gemini again instead of reusing answers in the old format.
-// v1: one "details" sentence.  v2: separate fields (name, promoter, date, venue...).
+// Bump when the prompt or response shape changes so old cache entries are
+// ignored. v2 = separate fields instead of one details string.
 const CACHE_VERSION = 'v2';
 
 function isImagePost(post) {
     return (post.type === 'Image' || post.type === 'Sidecar') && Boolean(post.displayUrl);
 }
 
-// One prompt for every Instagram account. The JSON shape of the answer is
-// enforced by the schema in utils/gemini.js; this text explains the task.
+// The response format is enforced by the schema in gemini.js.
 function buildPayload(post, caption, image) {
     const prompt = `You are a data extractor reading an Instagram post from the account "${post.ownerUsername || 'unknown'}".
 The account is a combat sports gym or promotion (Muay Thai, kickboxing, boxing, MMA).
